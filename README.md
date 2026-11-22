@@ -1,6 +1,10 @@
 # Ember Court — a duel of cards
 
-An original turn-based card battler for the make.fun best card game bounty.
+[![make.fun · best-card-game-20261122-1826](https://make.fun/badge/best-card-game-20261122-1826.svg)](https://make.fun/bounty/best-card-game-20261122-1826?utm_source=github&utm_medium=readme&utm_campaign=best-card-game-20261122-1826)
+[![rank](https://make.fun/badge/best-card-game-20261122-1826/airdropgodx24/best-card-game-20261122-1826/rank.svg)](https://make.fun/bounty/best-card-game-20261122-1826/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-card-game-20261122-1826)
+[![reward](https://make.fun/badge/best-card-game-20261122-1826/airdropgodx24/best-card-game-20261122-1826/reward.svg)](https://make.fun/bounty/best-card-game-20261122-1826?utm_source=github&utm_medium=readme&utm_campaign=best-card-game-20261122-1826)
+
+An original turn-based card battler for the [make.fun](https://make.fun/bounty/best-card-game-20261122-1826) best card game bounty.
 Two rivals, 20 life each, one court. Spend energy, play cards, break the
 other side first.
 
