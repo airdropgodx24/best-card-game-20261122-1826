@@ -1,53 +1,69 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Mouse and keyboard input for Ember Court.
+// Click a card in your hand to play it (keys 1-7 do the same),
+// click END TURN or press Space to end your turn, Enter to start,
+// R to restart after a duel ends.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+import { LAYOUT, VIEW_W, VIEW_H, cardRect } from './render.js';
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
-
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
-
+function toView(canvas, clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
+    x: ((clientX - rect.left) / rect.width) * VIEW_W,
+    y: ((clientY - rect.top) / rect.height) * VIEW_H,
   };
+}
+
+function inside(point, box) {
+  return point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h;
+}
+
+export function attachInput(canvas, hooks) {
+  canvas.addEventListener('mousemove', (event) => {
+    const p = toView(canvas, event.clientX, event.clientY);
+    hooks.onHover(hoveredCardIndex(p, hooks));
+  });
+  canvas.addEventListener('click', (event) => {
+    const p = toView(canvas, event.clientX, event.clientY);
+    handleClick(p, hooks);
+  });
+  window.addEventListener('keydown', (event) => {
+    if (event.key >= '1' && event.key <= '7') {
+      hooks.onPlayCard(Number(event.key) - 1);
+    } else if (event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault();
+      hooks.onConfirm();
+    } else if (event.key === 'r' || event.key === 'R') {
+      hooks.onRestart();
+    }
+  });
+}
+
+function hoveredCardIndex(p, hooks) {
+  const game = hooks.getGame();
+  if (game.phase !== 'player') return -1;
+  for (let i = 0; i < game.player.hand.length; i += 1) {
+    const rect = cardRect(i, game.player.hand.length, LAYOUT.playerHandY);
+    if (inside(p, rect)) return i;
+  }
+  return -1;
+}
+
+function handleClick(p, hooks) {
+  const game = hooks.getGame();
+  if (game.phase === 'title') {
+    if (inside(p, LAYOUT.startButton)) hooks.onStart();
+    return;
+  }
+  if (game.phase === 'over') {
+    if (inside(p, LAYOUT.restartButton)) hooks.onRestart();
+    return;
+  }
+  if (game.phase === 'player') {
+    if (inside(p, LAYOUT.endButton)) {
+      hooks.onEndTurn();
+      return;
+    }
+    const index = hoveredCardIndex(p, hooks);
+    if (index >= 0) hooks.onPlayCard(index);
+  }
 }

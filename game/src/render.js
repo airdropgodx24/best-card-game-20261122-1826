@@ -1,141 +1,297 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
+// Canvas rendering for Ember Court. Everything is drawn with canvas
+// shapes and text: no images, no fonts loaded over the network.
+// Layout is fixed at 1280x720 and scaled to the window.
 
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
+import { ELEMENTS, BEATS } from './cards.js';
+import { MAX_LIFE } from './state.js';
 
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
+export const VIEW_W = 1280;
+export const VIEW_H = 720;
 
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
+export const CARD_W = 132;
+export const CARD_H = 188;
+
+export const LAYOUT = {
+  foeHandY: 88,
+  playerHandY: 492,
+  endButton: { x: 1120, y: 330, w: 132, h: 52 },
+  restartButton: { x: 540, y: 470, w: 200, h: 56 },
+  startButton: { x: 490, y: 545, w: 300, h: 60 },
+};
+
+export function cardRect(index, count, y) {
+  const total = count * (CARD_W + 10) - 10;
+  const x0 = (VIEW_W - total) / 2;
+  return { x: x0 + index * (CARD_W + 10), y, w: CARD_W, h: CARD_H };
 }
 
-export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
-  function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
+function lifeBar(ctx, x, y, w, label, life, guard, alignRight) {
+  ctx.font = 'bold 26px Georgia, serif';
+  ctx.fillStyle = '#f5e9d0';
+  ctx.textAlign = alignRight ? 'right' : 'left';
+  ctx.fillText(`${label}  ♥ ${life}/${MAX_LIFE}`, alignRight ? x + w : x, y + 24);
+  if (guard > 0) {
+    ctx.fillStyle = '#7ec8ff';
+    ctx.fillText(`🛡 ${guard}`, alignRight ? x + w : x, y + 48);
   }
-
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
+  ctx.fillStyle = '#3a2418';
+  roundRect(ctx, x, y + 56, w, 14, 7);
+  ctx.fill();
+  if (life > 0) {
+    ctx.fillStyle = life > 10 ? '#e2483d' : '#ff5a3c';
+    roundRect(ctx, x, y + 56, (w * life) / MAX_LIFE, 14, 7);
+    ctx.fill();
   }
+}
 
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
-      }
-    }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
-    }
+export function drawCard(ctx, card, rect, opts) {
+  const el = ELEMENTS[card.element];
+  const hover = opts && opts.hover;
+  const playable = !opts || opts.playable !== false;
+  const y = hover ? rect.y - 14 : rect.y;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = hover ? 18 : 8;
+  ctx.shadowOffsetY = 4;
+  roundRect(ctx, rect.x, y, rect.w, rect.h, 12);
+  ctx.fillStyle = playable ? '#fdf6e3' : '#cfc4ae';
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
+  roundRect(ctx, rect.x, y, rect.w, rect.h, 12);
+  ctx.clip();
+  ctx.fillStyle = el.color;
+  ctx.fillRect(rect.x, y, rect.w, 46);
+  ctx.fillStyle = el.dark;
+  ctx.fillRect(rect.x, y + 46, rect.w, 4);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 17px Georgia, serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(card.name, rect.x + 10, y + 30, rect.w - 52);
+  ctx.beginPath();
+  ctx.arc(rect.x + rect.w - 22, y + 23, 16, 0, Math.PI * 2);
+  ctx.fillStyle = '#2b6cb0';
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(String(card.cost), rect.x + rect.w - 22, y + 30);
+  ctx.font = '44px serif';
+  ctx.fillText(el.symbol, rect.x + rect.w / 2, y + 108);
+  if (card.attack > 0) {
+    ctx.fillStyle = '#b3261e';
+    ctx.font = 'bold 34px Georgia, serif';
+    ctx.fillText(`⚔ ${card.attack}`, rect.x + rect.w / 2, y + 152);
+  } else {
+    ctx.fillStyle = '#2b6cb0';
+    ctx.font = 'bold 22px Georgia, serif';
+    ctx.fillText(`🛡 ${card.shield}`, rect.x + rect.w / 2, y + 150);
   }
-
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
+  ctx.fillStyle = '#4a3527';
+  ctx.font = 'italic 13px Georgia, serif';
+  ctx.fillText(card.text, rect.x + rect.w / 2, y + 176, rect.w - 16);
+  ctx.restore();
+  if (hover && !playable) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    roundRect(ctx, rect.x, y, rect.w, rect.h, 12);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Not enough energy', rect.x + rect.w / 2, y + rect.h / 2);
   }
+}
 
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
+function drawTable(ctx) {
+  const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+  g.addColorStop(0, '#2a160c');
+  g.addColorStop(1, '#1a0f0a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#274d2d';
+  roundRect(ctx, 30, 200, VIEW_W - 60, 280, 24);
+  ctx.fill();
+  ctx.strokeStyle = '#c9a227';
+  ctx.lineWidth = 3;
+  roundRect(ctx, 30, 200, VIEW_W - 60, 280, 24);
+  ctx.stroke();
+  ctx.fillStyle = '#c9a227';
+  ctx.font = 'bold 22px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('— THE EMBER COURT —', VIEW_W / 2, 232);
+}
+
+function drawCourt(ctx, game) {
+  const el = game.courtElement ? ELEMENTS[game.courtElement] : null;
+  // The advantaged element is the one that beats the court element.
+  const advantaged = el
+    ? ELEMENTS[Object.keys(BEATS).find((key) => BEATS[key] === game.courtElement)]
+    : null;
+  ctx.font = 'bold 20px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#f5e9d0';
+  if (el) {
+    ctx.fillText(`Court element: ${el.symbol} ${el.name}  —  ${advantaged.symbol} ${advantaged.name} cards gain +2 attack`, VIEW_W / 2, 290);
+  } else {
+    ctx.fillText('Court element: none yet — play any card to set it', VIEW_W / 2, 290);
   }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
+  if (game.lastPlay) {
+    const c = game.lastPlay.card;
+    const by = game.lastPlay.byPlayer ? 'You' : 'Rival';
+    ctx.font = '20px Georgia, serif';
+    ctx.fillStyle = '#ffe9b0';
+    ctx.fillText(`Last played: ${by} — ${c.name} (${ELEMENTS[c.element].name})`, VIEW_W / 2, 318);
   }
+}
 
-  resize();
-  window.addEventListener('resize', resize);
-  return { draw };
+function drawLog(ctx, game) {
+  ctx.textAlign = 'left';
+  ctx.font = '16px Georgia, serif';
+  game.log.slice(0, 3).forEach((line, i) => {
+    ctx.fillStyle = i === 0 ? '#ffe9b0' : '#cbb894';
+    ctx.fillText(line, 40, 386 + i * 21);
+  });
+}
+
+function drawEnergy(ctx, game) {
+  const p = game.player;
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 20px Georgia, serif';
+  ctx.fillStyle = '#f5e9d0';
+  ctx.fillText(`Energy: ${'●'.repeat(p.energy)}${'○'.repeat(Math.max(0, p.maxEnergy - p.energy))}  ${p.energy}/${p.maxEnergy}`, 40, 452);
+  ctx.fillStyle = '#cbb894';
+  ctx.font = '16px Georgia, serif';
+  ctx.fillText(`Turn ${game.turn}  •  Deck: ${p.deck.length} cards  •  Keys 1–7 play a card, Space ends turn`, 40, 474);
+}
+
+function drawEndButton(ctx, game) {
+  const b = LAYOUT.endButton;
+  const enabled = game.phase === 'player';
+  ctx.save();
+  roundRect(ctx, b.x, b.y, b.w, b.h, 10);
+  ctx.fillStyle = enabled ? '#c9a227' : '#6b5a3a';
+  ctx.fill();
+  ctx.strokeStyle = '#f5e9d0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = enabled ? '#241708' : '#d8cbb0';
+  ctx.font = 'bold 19px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('END TURN', b.x + b.w / 2, b.y + 33);
+  ctx.restore();
+}
+
+export function drawTitle(ctx, game) {
+  const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+  g.addColorStop(0, '#3a1408');
+  g.addColorStop(0.55, '#1a0f0a');
+  g.addColorStop(1, '#0d0705');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const samples = [game.player.hand[0], game.player.hand[1], game.player.hand[2]].filter(Boolean);
+  samples.forEach((card, i) => {
+    drawCard(ctx, card, { x: 470 + i * 150, y: 250, w: CARD_W, h: CARD_H }, { playable: true });
+  });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffb347';
+  ctx.font = 'bold 84px Georgia, serif';
+  ctx.fillText('EMBER COURT', VIEW_W / 2, 130);
+  ctx.fillStyle = '#f5e9d0';
+  ctx.font = 'italic 26px Georgia, serif';
+  ctx.fillText('A duel of cards, elements and nerve', VIEW_W / 2, 180);
+  ctx.font = '20px Georgia, serif';
+  ctx.fillStyle = '#ffe9b0';
+  ctx.fillText('Both sides start at 20 life. Spend energy, play cards, break the rival first.', VIEW_W / 2, 480);
+  ctx.fillText('Ember beats Leaf • Leaf beats Stone • Stone beats Tide • Tide beats Ember (+2 attack)', VIEW_W / 2, 512);
+  const b = LAYOUT.startButton;
+  ctx.save();
+  roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+  ctx.fillStyle = '#c9a227';
+  ctx.fill();
+  ctx.strokeStyle = '#f5e9d0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#241708';
+  ctx.font = 'bold 26px Georgia, serif';
+  ctx.fillText('CLICK OR PRESS ENTER', b.x + b.w / 2, b.y + 38);
+  ctx.restore();
+  ctx.fillStyle = '#cbb894';
+  ctx.font = '17px Georgia, serif';
+  ctx.fillText('Mouse or keys 1–7 to play • Space to end turn • R to restart', VIEW_W / 2, 630);
+}
+
+export function drawEnd(ctx, game) {
+  ctx.fillStyle = 'rgba(10,5,2,0.82)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.textAlign = 'center';
+  const won = game.winner === 'player';
+  ctx.fillStyle = won ? '#ffd94d' : '#ff6b5e';
+  ctx.font = 'bold 76px Georgia, serif';
+  ctx.fillText(won ? '👑 VICTORY!' : '💔 DEFEAT', VIEW_W / 2, 250);
+  ctx.fillStyle = '#f5e9d0';
+  ctx.font = '26px Georgia, serif';
+  ctx.fillText(
+    won
+      ? `The Ember Court is yours — rival at 0 life after ${game.turnsPlayed + 1} turns.`
+      : `The rival takes the court — you fell at 0 life after ${game.turnsPlayed + 1} turns.`,
+    VIEW_W / 2, 320,
+  );
+  ctx.font = '20px Georgia, serif';
+  ctx.fillText(`Final life — You ${game.player.life}  •  Rival ${game.foe.life}  •  Cards played: ${game.player.cardsPlayed}`, VIEW_W / 2, 360);
+  ctx.fillText('Press R or click Play Again to duel once more.', VIEW_W / 2, 400);
+  const b = LAYOUT.restartButton;
+  ctx.save();
+  roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+  ctx.fillStyle = '#c9a227';
+  ctx.fill();
+  ctx.strokeStyle = '#f5e9d0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#241708';
+  ctx.font = 'bold 24px Georgia, serif';
+  ctx.fillText('PLAY AGAIN', b.x + b.w / 2, b.y + 36);
+  ctx.restore();
+}
+
+export function drawGame(ctx, game, hoverIndex) {
+  drawTable(ctx);
+  // Both life totals live in the top bar, always visible, clear of the hands.
+  lifeBar(ctx, 40, 10, 300, 'RIVAL', game.foe.life, game.foe.guard, false);
+  lifeBar(ctx, 940, 10, 300, 'YOU', game.player.life, game.player.guard, true);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe9b0';
+  ctx.font = 'bold 20px Georgia, serif';
+  ctx.fillText(`TURN ${game.turn}`, VIEW_W / 2, 34);
+  game.foe.hand.forEach((card, i) => {
+    drawCard(ctx, card, cardRect(i, game.foe.hand.length, LAYOUT.foeHandY), { playable: false });
+  });
+  drawCourt(ctx, game);
+  drawLog(ctx, game);
+  drawEnergy(ctx, game);
+  drawEndButton(ctx, game);
+  game.player.hand.forEach((card, i) => {
+    const rect = cardRect(i, game.player.hand.length, LAYOUT.playerHandY);
+    const playable = game.phase === 'player' && card.cost <= game.player.energy;
+    drawCard(ctx, card, rect, { hover: hoverIndex === i, playable });
+  });
+  if (game.phase === 'foe') {
+    ctx.fillStyle = '#ffe9b0';
+    ctx.font = 'bold 22px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Rival is playing…', VIEW_W / 2, 348);
+  }
+  if (game.phase === 'over') drawEnd(ctx, game);
 }
